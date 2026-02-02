@@ -1,6 +1,6 @@
 FROM python:3.10-slim
 
-# FFmpeg နဲ့ လိုအပ်တဲ့ system tools တွေ သွင်းခြင်း
+# FFmpeg နှင့် လိုအပ်သည်များ သွင်းခြင်း
 RUN apt-get update && apt-get install -y ffmpeg git && apt-get clean
 
 WORKDIR /app
