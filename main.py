@@ -1,87 +1,57 @@
-import os
 import telebot
+import os
 import yt_dlp
-from telebot import types
+import time
 
-# မင်းပေးထားတဲ့ Token အသစ်
-API_TOKEN = '8459123928:AAHGCpzxppp6PdMuC3_Csw6H3W3F6j4bVzw'
+# Render Environment Variables ထဲက ခေါ်တာ
+API_TOKEN = os.environ.get('BOT_TOKEN')
 bot = telebot.TeleBot(API_TOKEN)
-
-user_data = {}
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    bot.reply_to(message, "နေကောင်းလား သားကြီး! သီချင်းနာမည် ဒါမှမဟုတ် YouTube Link ပို့ပေးပါ။")
+    bot.reply_to(message, "ဟိုင်း သားကြီး! Render ပေါ်မှာ Bot အသက်ဝင်နေပြီ။ သီချင်းနာမည် ပို့ပေးပါ။")
 
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     query = message.text
-    chat_id = message.chat.id
-    user_data[chat_id] = query
-
-    markup = types.InlineKeyboardMarkup()
-    item1 = types.InlineKeyboardButton("🔈 128kbps", callback_data="128")
-    item2 = types.InlineKeyboardButton("📻 192kbps", callback_data="192")
-    item3 = types.InlineKeyboardButton("🎧 320kbps (Pro)", callback_data="320")
-    markup.add(item1, item2)
-    markup.add(item3)
-
-    bot.send_message(chat_id, "📀 ဘယ်လို Quality မျိုးနဲ့ ဒေါင်းမလဲ သားကြီး?", reply_markup=markup)
-
-@bot.callback_query_handler(func=lambda call: True)
-def callback_query(call):
-    chat_id = call.message.chat.id
-    quality = call.data
-    query = user_data.get(chat_id)
-
-    if not query:
-        bot.send_message(chat_id, "❌ အချက်အလက် ပြန်ရိုက်ပေးပါဦး။")
-        return
-
-    sent_msg = bot.send_message(chat_id, f"📥 {quality}kbps နဲ့ ပြင်ဆင်နေတယ်...")
+    status_msg = bot.reply_to(message, "🔎 ရှာနေတယ် ခဏစောင့်...")
 
     ydl_opts = {
-        'format': 'bestaudio/best',
+        'format': 'bestaudio/best/best',
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
-            'preferredquality': quality,
+            'preferredquality': '192',
         }],
-        'outtmpl': '%(title)s.%(ext)s',
-        'cookiefile': 'cookies.txt',  # GitHub ထဲမှာ ဒီဖိုင်ရှိရမယ်
-        'noplaylist': True,
-        'quiet': False,
+        'outtmpl': 'downloads/%(title)s.%(ext)s',
+        'quiet': True
     }
 
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            search_query = f"ytsearch1:{query}" if not query.startswith('http') else query
-            info = ydl.extract_info(search_query, download=True)
-            
-            if 'entries' in info:
-                info = info['entries'][0]
-            
-            filename = ydl.prepare_filename(info)
-            base, ext = os.path.splitext(filename)
-            mp3_filename = base + '.mp3'
+        if not os.path.exists('downloads'):
+            os.makedirs('downloads')
 
-            bot.edit_message_text("📤 ပို့ပေးနေပြီ...", chat_id, sent_msg.message_id)
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            # YouTube မှာ ရှာမယ်
+            info = ydl.extract_info(f"ytsearch1:{query}", download=True)
+            video_info = info['entries'][0]
+            title = video_info['title']
+            file_path = ydl.prepare_filename(video_info).replace('.webm', '.mp3').replace('.m4a', '.mp3')
+
+            bot.edit_message_text("📤 ပို့နေပြီ...", message.chat.id, status_msg.message_id)
             
-            with open(mp3_filename, 'rb') as audio:
-                bot.send_audio(chat_id, audio, title=info.get('title'))
+            with open(file_path, 'rb') as audio:
+                bot.send_audio(message.chat.id, audio, title=title)
             
-            # ဖိုင်ဟောင်းတွေ ရှင်းထုတ်ခြင်း
-            if os.path.exists(mp3_filename): os.remove(mp3_filename)
-            if os.path.exists(filename): os.remove(filename)
-            bot.delete_message(chat_id, sent_msg.message_id)
+            # ပို့ပြီးရင် ဖိုင်ပြန်ဖျက်မယ် (Storage မပြည့်အောင်)
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            
+            bot.delete_message(message.chat.id, status_msg.message_id)
 
     except Exception as e:
-        error_msg = str(e)
-        if "Sign in to confirm" in error_msg:
-            bot.edit_message_text("❌ YouTube Block ခံထားရလို့ cookies.txt အသစ်လဲပေးပါ။", chat_id, sent_msg.message_id)
-        else:
-            bot.edit_message_text(f"❌ Error: {error_msg[:100]}", chat_id, sent_msg.message_id)
+        bot.edit_message_text(f"❌ အမှားတက်သွားတယ်: {str(e)}", message.chat.id, status_msg.message_id)
 
 if __name__ == "__main__":
-    print("Bot is starting...")
-    bot.infinity_polling(timeout=10, long_polling_timeout=5)
+    print("Bot is starting on Render...")
+    bot.polling(none_stop=True)
