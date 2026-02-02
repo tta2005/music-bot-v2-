@@ -2,87 +2,70 @@ import os
 import asyncio
 from pyrogram import Client, filters
 from pyrogram.types import Message
+from motor.motor_asyncio import AsyncIOMotorClient
 import yt_dlp
 
-# Koyeb Environment Variables ကနေ အချက်အလက်တွေ ယူမယ်
+# Environment Variables
 API_ID = int(os.environ.get("API_ID"))
 API_HASH = os.environ.get("API_HASH")
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
+MONGO_URL = os.environ.get("MONGO_URL") # MongoDB String ထည့်ဖို့မမေ့နဲ့နော်
 
-# Pyrogram Client ကို Bot Token နဲ့ Run မယ်
-app = Client(
-    "music_bot",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    bot_token=BOT_TOKEN
-)
+# Clients Setup
+app = Client("music_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+db_client = AsyncIOMotorClient(MONGO_URL)
+db = db_client.music_bot_db
+songs_collection = db.songs
 
 @app.on_message(filters.command("start"))
 async def start(client, message):
-    await message.reply_text("🔥 Pro Bot စနစ် အသက်ဝင်နေပြီ သားကြီး!\nသီချင်းနာမည် ပို့ပေးပါ။ SoundCloud ကနေ ရှာပေးမယ်။")
+    await message.reply_text("🚀 Pro Caching System အဆင်သင့်ပဲ!\nသီချင်းနာမည် ပို့ပေးပါ။")
 
 @app.on_message(filters.text & ~filters.command(["start"]))
-async def search_and_send(client, message: Message):
+async def music_engine(client, message: Message):
     query = message.text
     status = await message.reply_text(f"🔎 '{query}' ကို ရှာနေတယ်...")
     
-    # SoundCloud မှာ ရှာဖို့နဲ့ Network Error တွေ ကျော်ဖို့ Settings
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'quiet': True,
-        'nocheckcertificate': True,
-        'geo_bypass': True,
-        'headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-        }
-    }
+    # ၁။ Database မှာ အရင်စစ်မယ် (Caching)
+    cached_song = await songs_collection.find_one({"query": query.lower()})
+    if cached_song:
+        await status.edit("⚡ Database ထဲမှာ ရှိပြီးသားမို့လို့ ချက်ချင်း ပို့ပေးနေပြီ...")
+        try:
+            await client.send_audio(message.chat.id, cached_song['file_id'], caption=f"✅ Cached: {cached_song['title']}")
+            await status.delete()
+            return
+        except:
+            pass # File ID ပျက်နေရင် အောက်ကအတိုင်း အသစ်ပြန်ဒေါင်းမယ်
 
+    # ၂။ မရှိရင် SoundCloud ကနေ ဒေါင်းမယ်
+    ydl_opts = {'format': 'bestaudio/best', 'quiet': True, 'nocheckcertificate': True}
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # scsearch ဆိုတာ SoundCloud မှာ ရှာခိုင်းတာပါ
             search_results = ydl.extract_info(f"scsearch1:{query}", download=False)
-            
-            if not search_results or 'entries' not in search_results or not search_results['entries']:
-                await status.edit("❌ SoundCloud မှာ ရှာမတွေ့ဘူး သားကြီး။")
-                return
-
             video = search_results['entries'][0]
-            title = video['title']
-            url = video['url']
+            title, url = video['title'], video['url']
             
-            await status.edit(f"🎵 {title}\n\nအခု ဒေါင်းနေပြီ၊ ခဏစောင့်...")
+            await status.edit(f"📥 {title}\nကို ဒေါင်းလုဒ်ဆွဲနေတယ်...")
             
-            # ဒေါင်းလုဒ်ဖိုင် သိမ်းမယ့် လမ်းကြောင်း
-            if not os.path.exists('downloads'): 
-                os.makedirs('downloads')
-                
             path = f"downloads/{title}.mp3"
             ydl_opts['outtmpl'] = path.replace('.mp3', '.%(ext)s')
-            ydl_opts['postprocessors'] = [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192'
-            }]
+            ydl_opts['postprocessors'] = [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}]
             
-            # အမှန်တကယ် ဒေါင်းလုဒ်လုပ်မယ်
+            if not os.path.exists('downloads'): os.makedirs('downloads')
             ydl.download([url])
             
-            # Telegram ဆီ ပို့မယ်
-            await client.send_audio(
-                chat_id=message.chat.id,
-                audio=path,
-                title=title,
-                caption=f"🎧 {title}\n✅ Downloaded successfully!"
-            )
+            # ၃။ Telegram ဆီ ပို့ပြီး file_id ကို Database ထဲ သိမ်းမယ်
+            sent_audio = await client.send_audio(message.chat.id, path, title=title)
+            await songs_collection.insert_one({
+                "query": query.lower(),
+                "file_id": sent_audio.audio.file_id,
+                "title": title
+            })
             
-            # ပို့ပြီးရင် အမှိုက်ရှင်းမယ်
             await status.delete()
-            if os.path.exists(path): 
-                os.remove(path)
-
+            if os.path.exists(path): os.remove(path)
+            
     except Exception as e:
         await status.edit(f"❌ Error: {str(e)}")
 
-# Bot ကို စတင်မယ်
-if __name__ == "__main__":
-    app.run()
+app.run()
